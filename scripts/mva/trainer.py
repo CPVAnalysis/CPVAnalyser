@@ -263,7 +263,7 @@ class Trainer(object):
     mc_df = self.removeInfs(mc_df)
         
     data_df['weight'] = 1. #FIXME keep here?
-    mc_df['weight'] = 20. #FIXME keep here? reweight mc here for balanced training?
+    mc_df['weight'] = 1. #FIXME keep here? reweight mc here for balanced training?
 
     return data_df, mc_df
 
