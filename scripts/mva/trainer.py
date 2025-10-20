@@ -15,9 +15,7 @@ from datetime import datetime
 from glob import glob
 
 import ROOT
-import root_pandas
-from root_numpy import root2array
-from root_pandas import read_root
+import uproot
 
 from keras.models import Sequential, Model
 from keras.layers import Dense, Input, Dropout, BatchNormalization
@@ -38,6 +36,9 @@ from tools import Tools
 #from baseline_selection import selection
 #from categories import categories
 
+#TODO try with CNN?
+#TODO use phi_k1_dztrg etc. as feature
+
 #TODO add gen-matching
 #TODO make sure that only gen matched events are saved in bc
 
@@ -52,6 +53,16 @@ def getOptions():
   return parser.parse_args()
 
 
+#TODO defined in class and here. Take it from mva_tools?
+def getPandasQuery(selection):
+    '''
+    Converts selection to pandas query syntax
+    '''
+    query = selection.replace('&&', ' and ').replace('||', ' or ').replace('!=', ' not ').replace('!', ' not ')
+
+    return query
+
+
 class Sample(object):
   '''
     Class to convert the sample into dataframe while applying some selection
@@ -59,16 +70,15 @@ class Sample(object):
   def __init__(self, filename, selection):
     self.filename = filename
     self.selection = selection
-    #print self.selection
-    self.df = read_root(self.filename, 'signal_tree', where=self.selection, warn_missing_tree=True)
     try:
-      self.df = read_root(self.filename, 'signal_tree', where=self.selection, warn_missing_tree=True)
+        with uproot.open(self.filename) as file:
+          tree = file['signal_tree']
+          df = tree.arrays(library="pd")
+          self.df = df.query(getPandasQuery(self.selection))
     except:
-      print 'No entry was found with the requested selection'
-      self.df = pd.DataFrame()
-    print '\t selected events: {}'.format(len(self.df))
-
-
+        print('No entry was found with the requested selection')
+        self.df = pd.DataFrame()
+    print('\t selected events: {}'.format(len(self.df)))
 
 
 class Trainer(object):
@@ -161,7 +171,7 @@ class Trainer(object):
         cat = category.label,
         mem = 20000,
         )
-    print '\n --> submitting category {}'.format(category.label)
+    print('\n --> submitting category {}'.format(category.label))
     os.system(command)
 
 
@@ -171,14 +181,14 @@ class Trainer(object):
     '''
     plt.savefig('{}/{}.pdf'.format(self.outdir, name))    
     plt.savefig('{}/{}.png'.format(self.outdir, name))    
-    print ' --> {}/{}.png created'.format(self.outdir, name)
+    print(' --> {}/{}.png created'.format(self.outdir, name))
 
 
   def getDataSamples(self, extra_selection=None, max_files=-1):
     '''
       Function that fetches the samples into lists
     '''
-    #print('========> starting reading the trees')
+    #print('========> starting reading the trees'))
     now = time()
 
     ### data 
@@ -189,7 +199,9 @@ class Trainer(object):
     #  filename = '{path}/{pl}/ParkingBPH1_Run2018D/Chunk*/flat/flat_bparknano_{tagnano}.root'.format(path=path, pl=self.data_pl, tagnano=self.data_tagnano)
 
     #FIXME hardcoded
-    glob_path = '/eos/user/a/anlyon/CPVGen/V00_D1/*/*/*/*0/flat'
+    #glob_path = '/eos/user/a/anlyon/CPVGen/V00_D1/*/*/*/*0/flat'
+    #glob_path = '/eos/cms/store/group/phys_bphys/anlyon/CPVGen/data/V03_24Sep25/2018/D1/ParkingBPH1/crab_V03_24Sep25_D1_20251002_201533/251002_181540/0000/flat'
+    glob_path = '/eos/cms/store/group/phys_bphys/anlyon/CPVGen/data/V03_24Sep25/2018/A1/ParkingBPH1/crab_V03_24Sep25_A1_20250930_181836/250930_161914/0001/flat'
     filename = 'flat_bparknano.root'
     data_filenames = [f for f in glob('{}/{}'.format(glob_path, filename))]
 
@@ -198,7 +210,7 @@ class Trainer(object):
     data_samples = []
     for ifile, data_filename in enumerate(data_filenames):
       if max_files != -1 and ifile > max_files: continue
-      print data_filename
+      print(data_filename)
       data_samples.append(Sample(filename=data_filename, selection=self.baseline_selection + ' && ' + extra_selection))
 
     print('========> it took %.2f seconds' %(time() - now))
@@ -212,8 +224,9 @@ class Trainer(object):
     '''
     print('========> starting reading the trees')
     now = time()
-    filename_mc_1 = '/eos/user/a/anlyon/CPVGen/102X_crab_trgmu_filter/BsToPhiPhiTo4K/nanoFiles/merged/flat_bparknano.root'
-
+    #FIXME hardcoded
+    #filename_mc_1 = '/eos/user/a/anlyon/CPVGen/102X_crab_trgmu_filter/BsToPhiPhiTo4K/nanoFiles/merged/flat_bparknano.root'
+    filename_mc_1 = '/eos/cms/store/group/phys_bphys/anlyon/CPVGen/signal_central/V03_24Sep25/2018/dgneq0/BsToPhiPhiTo4K_TuneCP5_13TeV_pythia8-evtgen/crab_V03_24Sep25_dgneq0_20251001_220102/251001_200142/0000/flat/flat_bparknano.root' 
     mc_samples = [
       Sample(filename=filename_mc_1, selection=self.baseline_selection + ' && ' + extra_selection),
     ]
@@ -291,7 +304,7 @@ class Trainer(object):
     pd.options.mode.chained_assignment = None
 
     masses = self.getMassList(is_bc=is_bc)
-    print 'masses ',masses
+    print('masses ',masses)
     
     if data_type == 'mc':
       stats = dict.fromkeys(masses, 0)
@@ -380,7 +393,7 @@ class Trainer(object):
         for the_df in dfs[mass]:
           stat_permass += len(the_df)
         if stat_permass < statistics:
-          print 'Requesting {} events from a sample of {} events. Please provide a larger input data sample'.format(statistics, stat_permass)
+          print('Requesting {} events from a sample of {} events. Please provide a larger input data sample'.format(statistics, stat_permass))
           requested_stat = stat_permass
         df_tmp = pd.concat([idt for idt in dfs[mass]], sort=False)
         df_tmp = df_tmp.sample(requested_stat)
@@ -465,7 +478,7 @@ class Trainer(object):
     #scaler_filename = '/'.join([self.outdir, 'input_tranformation_weighted_{}.pck'.format(label)])
     scaler_filename = '/'.join([self.outdir, 'input_tranformation_weighted.pck'])
     pickle.dump(qt,open(scaler_filename, 'wb'))
-    print ' --> {} created'.format(scaler_filename)
+    print(' --> {} created'.format(scaler_filename))
 
     # save the exact list of features
     #features_filename = '/'.join([self.outdir, 'input_features_{}.pck'.format(label)])
@@ -474,7 +487,7 @@ class Trainer(object):
       pickle.dump(self.features, open(features_filename, 'wb' ))
     else:
       pickle.dump(self.features + ['mass_key'], open(features_filename, 'wb' ))
-    print ' --> {} created'.format(features_filename)
+    print(' --> {} created'.format(features_filename))
 
     return main_df, qt, xx, Y
 
@@ -495,7 +508,7 @@ class Trainer(object):
 
     # Define outputs of your model
     model = Model(input, output)
-    optimiser = Adam(lr=self.learning_rate)
+    optimiser = Adam(learning_rate=self.learning_rate)
     model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['mae', 'acc'])
     
     print(model.summary())
@@ -517,7 +530,8 @@ class Trainer(object):
     # save the model every now and then
     # kept only during excecution time and removed afterwards
     filepath = '/'.join([self.outdir, 'saved-model-{epoch:04d}_val_loss_{val_loss:.4f}_val_acc_{val_acc:.4f}.h5'])
-    save_model = ModelCheckpoint(filepath, monitor='val_acc', verbose=1, save_best_only=True, save_weights_only=False, mode='auto', period=1)
+    #save_model = ModelCheckpoint(filepath, monitor='val_acc', verbose=1, save_best_only=True, save_weights_only=False, mode='auto', period=1)
+    save_model = ModelCheckpoint(filepath, monitor='val_acc', verbose=1, save_best_only=True, save_weights_only=False, mode='auto')
     
     callbacks = [save_model]
     if self.do_early_stopping:
@@ -627,7 +641,7 @@ class Trainer(object):
     '''
     model_filename = '{}/net_model_weighted.h5'.format(self.outdir)
     model.save(model_filename)
-    print ' --> {} created'.format(model_filename)
+    print(' --> {} created'.format(model_filename))
 
 
   def plotParametrisedMass(self, df, df_full=None, data_type='', label=''):
@@ -845,11 +859,11 @@ class Trainer(object):
 
 
   def process(self):
-    print '---- MVA Trainer ----'
+    print('---- MVA Trainer ----')
     
     # create output directory
     if self.outdir == None:
-      print '\n -> create output directory'
+      print('\n -> create output directory')
       self.outdir = self.createOutDir()
     else:
       self.outdir = '.'
@@ -857,28 +871,29 @@ class Trainer(object):
     # copy script
     os.system('cp trainer.py {}'.format(self.outdir))
         
+    #TODO use year as category
     #for category in self.categories:
     #if category.label == 'incl': continue
     #if category.label != 'lxysiggt150_OS': continue
     #if category.label != 'lxysig50to150_OS': continue
-    #print '\n-.-.-'
-    #print 'category: {}'.format(category.label)
-    #print '-.-.-'
+    #print('\n-.-.-')
+    #print('category: {}'.format(category.label))
+    #print('-.-.-')
 
     #if self.category_batch != None and category.label != category_batch: continue 
 
     # get the samples
-    if not self.do_parametric:
-      print '\n -> get the samples'
-      data_samples = self.getDataSamples(extra_selection = 'fabs(bs_mass_corr - 5.367) > 0.2')
-      mc_samples = self.getMCSamples(extra_selection='ismatched == 1')
+    #if not self.do_parametric:
+    print('\n -> get the samples')
+    data_samples = self.getDataSamples(extra_selection = 'abs(bs_mass_corr - 5.367) > 0.2')
+    mc_samples = self.getMCSamples(extra_selection='ismatched == 1')
 
-      # create dataframes
-      print '\n -> create the dataframes'
-      data_df, mc_df = self.createDataframe(data_samples, mc_samples)
+    # create dataframes
+    print('\n -> create the dataframes')
+    data_df, mc_df = self.createDataframe(data_samples, mc_samples)
 
     #else:
-    #  print '\n -> create the dataframes'
+    #  print('\n -> create the dataframes')
     #  # do not load too much files in case of large statistics
     #  #if category.label in ['lxysig0to50_OS', 'lxysig0to50_SS', 'lxysig0to50_OS_Bc', 'lxysig0to50_SS_Bc']: max_files = 10 
     #  #elif category.label in ['lxysig50to150_OS', 'lxysig50to150_SS', 'lxysig50to150_OS_Bc', 'lxysig50to150_SS_Bc']: max_files = 30 
@@ -893,21 +908,20 @@ class Trainer(object):
     mc_df = self.assignTarget(mc_df, self.target_branch, 1) 
 
     # preprocessing the dataframes
-    print '\n -> preprocessing the dataframes' 
+    print('\n -> preprocessing the dataframes' )
     #main_df, qt, xx, Y = self.preprocessing(data_df, mc_df, category.label)
     main_df, qt, xx, Y = self.preprocessing(data_df, mc_df)
-    ##TODO add the scatter plots?
 
-    if self.do_parametric:
-      self.plotParametrisedMass(df=data_df, df_full=data_df_full, data_type='data', label=category.label)
-      self.plotParametrisedMass(df=mc_df, data_type='mc', label=category.label)
+    #if self.do_parametric:
+    #  self.plotParametrisedMass(df=data_df, df_full=data_df_full, data_type='data', label=category.label)
+    #  self.plotParametrisedMass(df=mc_df, data_type='mc', label=category.label)
 
     # define the NN
-    print '\n -> defining the model' 
+    print('\n -> defining the model' )
     model = self.defineModel()
 
     # define the callbacks
-    print '\n -> defining the callbacks' 
+    print('\n -> defining the callbacks' )
     #if statistics < 3000:
     #  patience_es = 5
     #  patience_lr = 3
@@ -920,7 +934,7 @@ class Trainer(object):
     # out of the main_df, define which data chunks to 
     # train and test on. Make sure that the features
     # are scaled
-    print '\n -> prepare the inputs' 
+    print('\n -> prepare the inputs' )
     x_train, x_val, y_train, y_val, weight_train, weight_val = self.prepareScaledInputs(main_df, Y, qt)
     #x_train, x_val, y_train, y_val = self.prepareInputs(xx, Y)
 
@@ -934,22 +948,22 @@ class Trainer(object):
     #stat_file.write('\nData+mc statistics used for training: {}'.format(len(x_train)))
     #stat_file.write('\nData+mc statistics used for validation: {}'.format(len(x_val)))
     #stat_file.close()
-    #print ' --> {} created'.format(stat_filename) 
+    #print(' --> {} created'.format(stat_filename) )
 
     # do the training
-    print '\n -> training...' 
+    print('\n -> training...' )
     history = self.train(model, x_train, y_train, x_val, y_val, weight_train, weight_val, callbacks)
 
     # save the model
-    print '\n -> save the model' 
+    print('\n -> save the model' )
     #self.saveModel(model, category.label)
     self.saveModel(model)
 
     # plotting
-    print '\n -> plotting...' 
-    if self.do_parametric:
-      self.plotParametrisedMass(df=data_df, df_full=data_df_full, data_type='data', label=category.label)
-      self.plotParametrisedMass(df=mc_df, data_type='mc', label=category.label)
+    print('\n -> plotting...' )
+    #if self.do_parametric:
+    #  self.plotParametrisedMass(df=data_df, df_full=data_df_full, data_type='data', label=category.label)
+    #  self.plotParametrisedMass(df=mc_df, data_type='mc', label=category.label)
     self.plotLoss(history)
     self.plotAccuracy(history)
     #self.plotScore(model, mc_test_df, data_test_df, category.label)
@@ -960,30 +974,30 @@ class Trainer(object):
     self.plotKSTest(model, x_train, x_val, y_train, y_val, 'data')
     self.plotKSTest(model, x_train, x_val, y_train, y_val, 'mc')
 
-    # cleaning
-    print '\n -> cleaning'
-    os.system('rm -r {}/saved-model*h5'.format(self.outdir))
+    ## cleaning
+    #print('\n -> cleaning')
+    #os.system('rm -r {}/saved-model*h5'.format(self.outdir))
 
-    print '\n --- Done ---'
+    print('\n --- Done ---')
 
 
   def process_batch(self):
-    print '---- MVA Trainer ----'
+    print('---- MVA Trainer ----')
 
     # create output directory
-    print '\n -> create output directory'
+    print('\n -> create output directory')
     self.outdir = self.createOutDir()
 
     for category in self.categories:
       if category.label == 'incl': continue
       if category.label != 'lxysig50to150_OS': continue
-      print '\n-.-.-'
-      print 'category: {}'.format(category.label)
-      print '-.-.-'
+      print('\n-.-.-')
+      print('category: {}'.format(category.label))
+      print('-.-.-')
       self.writeSubmitter(category=category)
       self.submit(category=category)
       
-    print '\n --- Done ---'
+    print('\n --- Done ---')
 
 
 
@@ -1051,8 +1065,8 @@ if __name__ == '__main__':
 
   #features = ['pi_pt','mu_pt', 'mu0_pt','hnl_cos2d', 'sv_lxysig', 'pi_dcasig_corr', 'sv_prob', 'mu0_mu_mass', 'mu0_pi_mass', 'b_mass','deltar_mu0_mu', 'deltar_mu0_pi', 'mu0_pfiso03_rel', 'mu_pfiso03_rel', 'pi_numberofpixellayers', 'pi_numberoftrackerlayers', 'mu_numberofpixellayers', 'mu_numberoftrackerlayers', 'mu0_numberofpixellayers', 'mu0_numberoftrackerlayers']
 
-  epochs = 50#3 #100
-  batch_size = 32 #50 #32
+  epochs = 3#50#3 #100
+  batch_size = 50 #32 #50 #32
   learning_rate = 0.005 #0.01
   number_nodes = 64
   scaler_type = 'robust'
