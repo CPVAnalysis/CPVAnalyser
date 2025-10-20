@@ -32,17 +32,13 @@ from sklearn.preprocessing import RobustScaler, StandardScaler
 sys.path.append('../')
 #sys.path.append('../../objects')
 from tools import Tools
+from mva_tools import MVATools
 #from samples import signal_samples
 #from baseline_selection import selection
 #from categories import categories
 
 #TODO try with CNN?
 #TODO use phi_k1_dztrg etc. as feature
-
-#TODO add gen-matching
-#TODO make sure that only gen matched events are saved in bc
-
-# remove m4p5 ctau 100 form training?
 
 def getOptions():
   from argparse import ArgumentParser
@@ -53,16 +49,6 @@ def getOptions():
   return parser.parse_args()
 
 
-#TODO defined in class and here. Take it from mva_tools?
-def getPandasQuery(selection):
-    '''
-    Converts selection to pandas query syntax
-    '''
-    query = selection.replace('&&', ' and ').replace('||', ' or ').replace('!=', ' not ').replace('!', ' not ')
-
-    return query
-
-
 class Sample(object):
   '''
     Class to convert the sample into dataframe while applying some selection
@@ -70,11 +56,12 @@ class Sample(object):
   def __init__(self, filename, selection):
     self.filename = filename
     self.selection = selection
+    self.mva_tools = MVATools()
     try:
         with uproot.open(self.filename) as file:
           tree = file['signal_tree']
           df = tree.arrays(library="pd")
-          self.df = df.query(getPandasQuery(self.selection))
+          self.df = df.query(self.mva_tools.getPandasQuery(self.selection))
     except:
         print('No entry was found with the requested selection')
         self.df = pd.DataFrame()
@@ -82,8 +69,10 @@ class Sample(object):
 
 
 class Trainer(object):
-  #def __init__(self, features, epochs, batch_size, learning_rate, number_nodes, scaler_type, do_early_stopping, do_reduce_lr, do_parametric, signal_label, data_pl, data_tagnano, data_tagflat, nsigma, dirname, baseline_selection, categories, category_batch, outdir):
-  def __init__(self, features, epochs, batch_size, learning_rate, number_nodes, scaler_type, do_early_stopping, do_reduce_lr, do_parametric, signal_label, data_pl, data_tagnano, data_tagflat, nsigma, dirname, baseline_selection, outdir):
+  #def __init__(self, features, epochs, batch_size, learning_rate, number_nodes, scaler_type, do_early_stopping, do_reduce_lr, signal_label, data_pl, data_tagnano, data_tagflat, nsigma, dirname, baseline_selection, categories, category_batch, outdir):
+  def __init__(self, features, epochs, batch_size, learning_rate, number_nodes, scaler_type, do_early_stopping, do_reduce_lr, signal_label, data_pl, data_tagnano, data_tagflat, nsigma, dirname, baseline_selection, outdir):
+    self.mva_tools = MVATools()
+
     self.features = features
     self.epochs = epochs
     self.batch_size = batch_size
@@ -107,7 +96,6 @@ class Trainer(object):
     self.data_tagnano = data_tagnano
     self.data_tagflat = data_tagflat
 
-    self.do_parametric = do_parametric
     self.nsigma = nsigma
 
     self.target_branch = 'is_signal'
@@ -236,15 +224,6 @@ class Trainer(object):
     return mc_samples
 
 
-  def getPandasQuery(self, selection):
-    '''
-      Converts selection to pandas query syntax
-    '''
-    query = selection.replace('&&', ' and ').replace('||', ' or ').replace('!=', ' not ').replace('!', ' not ')
-    
-    return query
-
-
   def getMassList(self, is_bc=False):
     '''
       Get the list of signal masses used in the training
@@ -304,7 +283,6 @@ class Trainer(object):
     pd.options.mode.chained_assignment = None
 
     masses = self.getMassList(is_bc=is_bc)
-    print('masses ',masses)
     
     if data_type == 'mc':
       stats = dict.fromkeys(masses, 0)
@@ -374,7 +352,7 @@ class Trainer(object):
           #  raise RuntimeError('There is an overlap of window around mass {} GeV with the previous window. Please adapt the window size.'.format(mass))
 
           window = 'hnl_mass > {} && hnl_mass < {}'.format(window_min, window_max)
-          df_window = the_df.query(self.getPandasQuery(window))
+          df_window = the_df.query(self.mva_tools.getPandasQuery(window))
           df_window['mass_key'] = mass
 
           # set the weight
@@ -428,17 +406,8 @@ class Trainer(object):
       else:
         raise RuntimeError('Unknown scaler "{}" - Aborting...'.format(self.scaler_type))
 
-      if not self.do_parametric:
-        qt.fit(X[self.features])
-        xx = qt.transform(X[self.features])
-      else:
-        if self.do_scale_key:
-          qt.fit(X[self.features + ['mass_key']])
-          xx = qt.transform(X[self.features + ['mass_key']])
-        else:
-          qt.fit(X[self.features])
-          xx = qt.transform(X[self.features])
-          xx = np.insert(xx, (len(self.features)), X['mass_key'], axis=1)
+      qt.fit(X[self.features])
+      xx = qt.transform(X[self.features])
 
       return xx, qt
 
@@ -464,10 +433,7 @@ class Trainer(object):
     main_df = main_df.sample(frac=1, replace=False, random_state=1986) # of course, keep R's seed ;)
 
     # X and Y
-    if not self.do_parametric:
-      X = pd.DataFrame(main_df, columns=list(set(self.features)))
-    else:
-      X = pd.DataFrame(main_df, columns=list(set(self.features)) + ['mass_key'])
+    X = pd.DataFrame(main_df, columns=list(set(self.features)))
     Y = pd.DataFrame(main_df, columns=[self.target_branch])
 
     # scale the features
@@ -483,10 +449,8 @@ class Trainer(object):
     # save the exact list of features
     #features_filename = '/'.join([self.outdir, 'input_features_{}.pck'.format(label)])
     features_filename = '/'.join([self.outdir, 'input_features.pck'])
-    if not self.do_parametric:
-      pickle.dump(self.features, open(features_filename, 'wb' ))
-    else:
-      pickle.dump(self.features + ['mass_key'], open(features_filename, 'wb' ))
+    pickle.dump(self.features, open(features_filename, 'wb' ))
+
     print(' --> {} created'.format(features_filename))
 
     return main_df, qt, xx, Y
@@ -501,7 +465,7 @@ class Trainer(object):
     activation = 'relu'
     
     # define the net
-    n_input = len(self.features) if not self.do_parametric else len(self.features) + 1 
+    n_input = len(self.features) 
     input  = Input((n_input,))
     layer  = Dense(self.number_nodes, activation=activation, name='dense1', kernel_constraint=unit_norm())(input)
     output = Dense(1 , activation='sigmoid' , name='output', )(layer)
@@ -530,7 +494,6 @@ class Trainer(object):
     # save the model every now and then
     # kept only during excecution time and removed afterwards
     filepath = '/'.join([self.outdir, 'saved-model-{epoch:04d}_val_loss_{val_loss:.4f}_val_acc_{val_acc:.4f}.h5'])
-    #save_model = ModelCheckpoint(filepath, monitor='val_acc', verbose=1, save_best_only=True, save_weights_only=False, mode='auto', period=1)
     save_model = ModelCheckpoint(filepath, monitor='val_acc', verbose=1, save_best_only=True, save_weights_only=False, mode='auto')
     
     callbacks = [save_model]
@@ -554,12 +517,8 @@ class Trainer(object):
     x_train, x_val, y_train, y_val = train_test_split(xx, Y, test_size=0.2, shuffle=True)
     
     # name the columns (selected in doScaling) consistently
-    if not self.do_parametric:
-      x_train = pd.DataFrame(x_train, columns=list(set(self.features))) # alternative to X_train[self.features[:]]
-      x_val = pd.DataFrame(x_val, columns=list(set(self.features)))
-    else:
-      x_train = pd.DataFrame(x_train, columns=list(set(self.features)) + ['mass_key'])
-      x_val = pd.DataFrame(x_val, columns=list(set(self.features)) + ['mass_key'])
+    x_train = pd.DataFrame(x_train, columns=list(set(self.features))) # alternative to X_train[self.features[:]]
+    x_val = pd.DataFrame(x_val, columns=list(set(self.features)))
 
     x_train = x_train.reset_index(drop=True)
     x_val = x_val.reset_index(drop=True)
@@ -580,12 +539,8 @@ class Trainer(object):
     x_train_tot, x_val_tot, y_train, y_val = train_test_split(main_df, Y, test_size=0.2, shuffle=True)
 
     # select training features
-    if not self.do_parametric:
-      x_train = x_train_tot[self.features]
-      x_val = x_val_tot[self.features]
-    else:
-      x_train = x_train_tot[self.features + ['mass_key']]
-      x_val = x_val_tot[self.features + ['mass_key']]
+    x_train = x_train_tot[self.features]
+    x_val = x_val_tot[self.features]
 
     # scale the features
     x_train = qt.transform(x_train)
@@ -613,20 +568,14 @@ class Trainer(object):
     '''
       Return score with scaled input features
     '''
-    if not self.do_parametric or not self.do_scale_key:
-      x = pd.DataFrame(df, columns=self.features)
-    else:
-      x = pd.DataFrame(df, columns=self.features + ['mass_key'])
+    x = pd.DataFrame(df, columns=self.features)
 
     # apply the scaler
     scaler_filename = '/'.join([self.outdir, 'input_tranformation_weighted.pck'])
     qt = pickle.load(open(scaler_filename, 'rb'))
 
     # if not scaling key
-    if not self.do_parametric or not self.do_scale_key:
-      xx = qt.transform(x[self.features])
-    else:
-      xx = qt.transform(x[self.features + ['mass_key']])
+    xx = qt.transform(x[self.features])
 
     # predict
     score = model.predict(xx)
@@ -666,7 +615,7 @@ class Trainer(object):
       window_min = mass - self.nsigma * resolution
       window_max = mass + self.nsigma * resolution
       window = 'hnl_mass > {} && hnl_mass < {}'.format(window_min, window_max)
-      df_window = df.query(self.getPandasQuery(window))
+      df_window = df.query(self.mva_tools.getPandasQuery(window))
       ax.hist(df_window['hnl_mass'], bins=np.arange(bin_min, bin_max, (bin_max-bin_min)/nbins), label='mass key = {}'.format(mass))
 
     ax.legend(loc='upper right',prop={'size': 12})
@@ -808,12 +757,8 @@ class Trainer(object):
     if data_type not in ['data', 'mc']:
       raise RuntimeError('Unknown data_type "{}". Aborting'.format(data_type))
     
-    if not self.do_parametric:
-      x_train = pd.DataFrame(x_train, columns=list(set(self.features)))
-      x_val = pd.DataFrame(x_val, columns=list(set(self.features)))
-    else:
-      x_train = pd.DataFrame(x_train, columns=list(set(self.features)) + ['mass_key'])
-      x_val = pd.DataFrame(x_val, columns=list(set(self.features)) + ['mass_key'])
+    x_train = pd.DataFrame(x_train, columns=list(set(self.features)))
+    x_val = pd.DataFrame(x_val, columns=list(set(self.features)))
 
     x_train = x_train.reset_index(drop=True)
     x_val = x_val.reset_index(drop=True)
@@ -883,7 +828,6 @@ class Trainer(object):
     #if self.category_batch != None and category.label != category_batch: continue 
 
     # get the samples
-    #if not self.do_parametric:
     print('\n -> get the samples')
     data_samples = self.getDataSamples(extra_selection = 'abs(bs_mass_corr - 5.367) > 0.2')
     mc_samples = self.getMCSamples(extra_selection='ismatched == 1')
@@ -911,10 +855,6 @@ class Trainer(object):
     print('\n -> preprocessing the dataframes' )
     #main_df, qt, xx, Y = self.preprocessing(data_df, mc_df, category.label)
     main_df, qt, xx, Y = self.preprocessing(data_df, mc_df)
-
-    #if self.do_parametric:
-    #  self.plotParametrisedMass(df=data_df, df_full=data_df_full, data_type='data', label=category.label)
-    #  self.plotParametrisedMass(df=mc_df, data_type='mc', label=category.label)
 
     # define the NN
     print('\n -> defining the model' )
@@ -961,9 +901,6 @@ class Trainer(object):
 
     # plotting
     print('\n -> plotting...' )
-    #if self.do_parametric:
-    #  self.plotParametrisedMass(df=data_df, df_full=data_df_full, data_type='data', label=category.label)
-    #  self.plotParametrisedMass(df=mc_df, data_type='mc', label=category.label)
     self.plotLoss(history)
     self.plotAccuracy(history)
     #self.plotScore(model, mc_test_df, data_test_df, category.label)
@@ -974,9 +911,9 @@ class Trainer(object):
     self.plotKSTest(model, x_train, x_val, y_train, y_val, 'data')
     self.plotKSTest(model, x_train, x_val, y_train, y_val, 'mc')
 
-    ## cleaning
-    #print('\n -> cleaning')
-    #os.system('rm -r {}/saved-model*h5'.format(self.outdir))
+    # cleaning
+    print('\n -> cleaning')
+    os.system('rm -r {}/saved-model*h5'.format(self.outdir))
 
     print('\n --- Done ---')
 
@@ -1084,7 +1021,6 @@ if __name__ == '__main__':
 
   submit_batch = False
 
-  do_parametric = False
   nsigma = 10
   signal_label = 'V13_06Feb23_m2'
   data_pl = 'V13_06Feb23'
@@ -1100,7 +1036,6 @@ if __name__ == '__main__':
       scaler_type = scaler_type,
       do_early_stopping = do_early_stopping,
       do_reduce_lr = do_reduce_lr,
-      do_parametric = do_parametric,
       signal_label = signal_label, 
       data_pl = data_pl,
       data_tagnano = data_tagnano,
