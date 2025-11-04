@@ -2,6 +2,9 @@ import os
 import sys
 from os import path
 
+import warnings
+warnings.filterwarnings("ignore", message="The value of the smallest subnormal.*")
+
 import pickle
 import numpy as np
 import pandas as pd
@@ -30,10 +33,11 @@ from sklearn.metrics import roc_curve
 from sklearn.preprocessing import RobustScaler, StandardScaler
 
 sys.path.append('../')
-#sys.path.append('../../objects')
+sys.path.append('../../objects')
 from tools import Tools
 from mva_tools import MVATools
-#from samples import signal_samples
+from data_samples import data_samples
+from signal_samples  import signal_samples
 #from baseline_selection import selection
 #from categories import categories
 
@@ -70,7 +74,8 @@ class Sample(object):
 
 class Trainer(object):
   #def __init__(self, features, epochs, batch_size, learning_rate, number_nodes, scaler_type, do_early_stopping, do_reduce_lr, signal_label, data_pl, data_tagnano, data_tagflat, nsigma, dirname, baseline_selection, categories, category_batch, outdir):
-  def __init__(self, features, epochs, batch_size, learning_rate, number_nodes, scaler_type, do_early_stopping, do_reduce_lr, signal_label, data_pl, data_tagnano, data_tagflat, nsigma, dirname, baseline_selection, outdir):
+  #def __init__(self, features, epochs, batch_size, learning_rate, number_nodes, scaler_type, do_early_stopping, do_reduce_lr, signal_label, data_pl, data_tagnano, data_tagflat, nsigma, dirname, baseline_selection, outdir):
+  def __init__(self, features, epochs, batch_size, learning_rate, number_nodes, scaler_type, do_early_stopping, do_reduce_lr, data_files, signal_files, dirname, baseline_selection, year, outdir):
     self.mva_tools = MVATools()
 
     self.features = features
@@ -86,23 +91,19 @@ class Trainer(object):
     self.baseline_selection = baseline_selection
     #self.categories = categories
     #self.category_batch = category_batch
-    self.signal_label = signal_label
+    #self.signal_label = signal_label
     #self.signal_files = signal_samples[self.signal_label]
+
+    self.year = year
 
     self.outdir = outdir
 
     self.username = 'anlyon'
-    self.data_pl = data_pl
-    self.data_tagnano = data_tagnano
-    self.data_tagflat = data_tagflat
-
-    self.nsigma = nsigma
+    self.data_files = data_files
+    self.signal_files = signal_files
 
     self.target_branch = 'is_signal'
     self.do_scale_key = True
-
-    self.resolution_p0 = 6.98338e-04
-    self.resolution_p1 = 7.78382e-03
 
 
   def createOutDir(self):
@@ -172,38 +173,34 @@ class Trainer(object):
     print(' --> {}/{}.png created'.format(self.outdir, name))
 
 
-  def getDataSamples(self, extra_selection=None, max_files=-1):
+  def getDataSamples(self, extra_selection=None, max_stat=-1):
     '''
       Function that fetches the samples into lists
     '''
-    #print('========> starting reading the trees'))
+    print('========> starting reading the trees')
     now = time()
 
-    ### data 
-    #path = '/pnfs/psi.ch/cms/trivcat/store/user/{}/BHNLsGen/data'.format(self.username)
-    #if self.data_tagflat != None:
-    #  filename = '{path}/{pl}/ParkingBPH1_Run2018D/Chunk*/flat/flat_bparknano_{tagnano}_{tagflat}.root'.format(path=path, pl=self.data_pl, tagnano=self.data_tagnano, tagflat=self.data_tagflat)
-    #else:
-    #  filename = '{path}/{pl}/ParkingBPH1_Run2018D/Chunk*/flat/flat_bparknano_{tagnano}.root'.format(path=path, pl=self.data_pl, tagnano=self.data_tagnano)
-
-    #FIXME hardcoded
-    #glob_path = '/eos/user/a/anlyon/CPVGen/V00_D1/*/*/*/*0/flat'
-    #glob_path = '/eos/cms/store/group/phys_bphys/anlyon/CPVGen/data/V03_24Sep25/2018/D1/ParkingBPH1/crab_V03_24Sep25_D1_20251002_201533/251002_181540/0000/flat'
-    glob_path = '/eos/cms/store/group/phys_bphys/anlyon/CPVGen/data/V03_24Sep25/2018/A1/ParkingBPH1/crab_V03_24Sep25_A1_20250930_181836/250930_161914/0001/flat'
-    filename = 'flat_bparknano.root'
-    data_filenames = [f for f in glob('{}/{}'.format(glob_path, filename))]
-
-    #data_filenames = sorted(data_filenames, key=lambda file_: float(file_[file_.find('Chunk')+5:file_.find('_', file_.find('Chunk')+5)]))
+    background_samples = [f for f in self.data_files if f.year == self.year]
+    if self.year == '2018':
+        background_samples = sorted(background_samples, key=lambda s: ('D' not in s.label, s.label))
+    else:
+        print('Do we want to prioritise one dataset?')
 
     data_samples = []
-    for ifile, data_filename in enumerate(data_filenames):
-      if max_files != -1 and ifile > max_files: continue
-      print(data_filename)
-      data_samples.append(Sample(filename=data_filename, selection=self.baseline_selection + ' && ' + extra_selection))
+    stat = 0
+    for background_sample in background_samples:
+        print(background_sample.filename)
+        sample = Sample(filename=background_sample.filename, selection=self.baseline_selection + ' && ' + extra_selection)
+        data_samples.append(sample)
+        stat += len(sample.df) 
+        if stat > max_stat: break
+
+    weight_balance_mc = stat / max_stat
+    print(weight_balance_mc)
 
     print('========> it took %.2f seconds' %(time() - now))
 
-    return data_samples
+    return data_samples, weight_balance_mc
 
 
   def getMCSamples(self, extra_selection=None, max_files=-1):
@@ -212,16 +209,24 @@ class Trainer(object):
     '''
     print('========> starting reading the trees')
     now = time()
-    #FIXME hardcoded
-    #filename_mc_1 = '/eos/user/a/anlyon/CPVGen/102X_crab_trgmu_filter/BsToPhiPhiTo4K/nanoFiles/merged/flat_bparknano.root'
-    filename_mc_1 = '/eos/cms/store/group/phys_bphys/anlyon/CPVGen/signal_central/V03_24Sep25/2018/dgneq0/BsToPhiPhiTo4K_TuneCP5_13TeV_pythia8-evtgen/crab_V03_24Sep25_dgneq0_20251001_220102/251001_200142/0000/flat/flat_bparknano.root' 
-    mc_samples = [
-      Sample(filename=filename_mc_1, selection=self.baseline_selection + ' && ' + extra_selection),
-    ]
+    signal_samples = [f for f in self.signal_files if f.year == self.year]
+
+    mc_samples = []
+    #max_stat = 500000 # temporary? to avoid memory issue
+    stat = 0
+    for signal_sample in signal_samples:
+        print(signal_sample.filename)
+        sample = Sample(filename=signal_sample.filename, selection=self.baseline_selection + ' && ' + extra_selection)
+        mc_samples.append(sample)
+        stat += len(sample.df)
+
+    # if mem issue: use df.head(max_stat), or df_sub = df.sample(n=max_stat, random_state=42)
       
     print('========> it took %.2f seconds' %(time() - now))
 
-    return mc_samples
+    #print('MC stat: {}'.format(stat))
+
+    return mc_samples, stat
 
 
   def getMassList(self, is_bc=False):
@@ -252,7 +257,7 @@ class Trainer(object):
     return df
 
 
-  def createDataframe(self, data_samples, mc_samples):
+  def createDataframe(self, data_samples, mc_samples, weight_balance_mc=1.):
     '''
       Function that converts root samples to pandas dataframe
     '''
@@ -262,127 +267,11 @@ class Trainer(object):
     data_df = self.removeInfs(data_df)
     mc_df = self.removeInfs(mc_df)
         
-    data_df['weight'] = 1. #FIXME keep here?
-    mc_df['weight'] = 1. #FIXME keep here? reweight mc here for balanced training?
+    # balance training between data and mc
+    data_df['weight'] = 1.
+    mc_df['weight'] = weight_balance_mc
 
     return data_df, mc_df
-
-
-  def createParametrisedDataframe(self, extra_selection, data_type, is_bc=False, statistics=None, max_files=-1):
-    '''
-      Function to create the dataframe with the training features and parameter
-      The statistics is balanced between the signal and background, among the signal
-      hypotheses and the background windows
-    '''
-    if data_type not in ['data', 'mc']:
-      raise RuntimeError('Unknown data type "{}". Please check'.format(data_type))
-
-    if data_type == 'data' and statistics == None:
-      raise RuntimeError('Please first create mc dataframe in order to get the available statistics')
-
-    pd.options.mode.chained_assignment = None
-
-    masses = self.getMassList(is_bc=is_bc)
-    
-    if data_type == 'mc':
-      stats = dict.fromkeys(masses, 0)
-      n_ctaus = dict.fromkeys(masses, 0)
-      dfs = dict.fromkeys(masses, []) 
-
-      for signal_file in self.signal_files: 
-        # get sample
-        signal_filename = signal_file.filename if not is_bc else signal_file.filename_Bc
-        if is_bc and signal_file.filename_Bc == None: continue # skip points for which there is no Bc sample
-        if not is_bc and signal_file.filename == None: continue # skip mass 5.5 GeV for non-Bc category
-        sample = Sample(filename=signal_filename, selection=self.baseline_selection + ' && ' + extra_selection)
-
-        # get dataframe
-        the_df = sample.df
-
-        # get the statistics per mass point
-        stats[signal_file.mass] += len(the_df)
-
-        # get number of ctau samples per mass point
-        n_ctaus[signal_file.mass] += 1
-
-        # set the mass parameter to the exact value
-        the_df['mass_key'] = signal_file.mass
-
-        # weight the mc with the trigger scale factors
-        #the_df = the_df.rename(columns={'weight_hlt_D1': 'weight'})
-        the_df['weight'] = 1.
-
-        dfs[signal_file.mass] = dfs[signal_file.mass] + [the_df]
-
-      # get the minimum statistics 
-      #statistics = min(stats[min(stats, key=stats.get)], 5000)
-      #aimed_statistics = stats[min(stats, key=stats.get)]
-      statistics = stats[min(stats, key=stats.get)]
-      
-      df = pd.DataFrame()
-      for mass in masses:
-        df_tmp = pd.concat([(idt.sample(statistics/n_ctaus[mass]) if statistics/n_ctaus[mass]<len(idt) else idt) for idt in dfs[mass]], sort=False)
-        df = pd.concat([df, df_tmp], sort=False) 
-      
-        
-    elif data_type == 'data':
-      # get the sample
-      samples = self.getDataSamples(extra_selection=extra_selection, max_files=max_files) 
-
-      df_full = [] # will be used for plotting purposes later on
-      dfs = dict.fromkeys(masses, []) 
-
-      for sample in samples:
-        # get the dataframe
-        the_df = sample.df
-        df_full.append(the_df)
-
-        # first set an invalid parameter for the full spectrum. Ranges with this parameter will be removed from the training
-        the_df['mass_key'] = -1 
-
-        # and define the windows of nsigma around the mass hypothesis
-        # set the mass parameter for a nsigma window range
-        window_check = -1
-        for mass in masses:
-          resolution = self.resolution_p0 + self.resolution_p1 * mass
-          window_min = mass - self.nsigma * resolution
-          window_max = mass + self.nsigma * resolution
-          # prevent windows to overlap
-          #if window_check != -1 and window_min <= window_check:
-          #  raise RuntimeError('There is an overlap of window around mass {} GeV with the previous window. Please adapt the window size.'.format(mass))
-
-          window = 'hnl_mass > {} && hnl_mass < {}'.format(window_min, window_max)
-          df_window = the_df.query(self.mva_tools.getPandasQuery(window))
-          df_window['mass_key'] = mass
-
-          # set the weight
-          df_window['weight'] = 1.
-
-          dfs[mass] = dfs[mass] + [df_window]
-
-          window_check = window_max
-
-      df_full = pd.concat([idt for idt in df_full], sort=False)
-
-      df = pd.DataFrame()
-      for mass in masses:
-        requested_stat = statistics
-        stat_permass = 0
-        for the_df in dfs[mass]:
-          stat_permass += len(the_df)
-        if stat_permass < statistics:
-          print('Requesting {} events from a sample of {} events. Please provide a larger input data sample'.format(statistics, stat_permass))
-          requested_stat = stat_permass
-        df_tmp = pd.concat([idt for idt in dfs[mass]], sort=False)
-        df_tmp = df_tmp.sample(requested_stat)
-        df = pd.concat([df, df_tmp], sort=False) 
-    
-    df = self.removeInfs(df)
-
-    if data_type == 'mc':
-      return df, statistics
-    else:
-      return df, df_full
 
 
   def assignTarget(self, df, branch, target):
@@ -489,7 +378,7 @@ class Trainer(object):
     es = EarlyStopping(monitor=monitor, mode='auto', verbose=1, patience=patience_es)
     
     # reduce learning rate when at plateau, fine search the minimum
-    reduce_lr = ReduceLROnPlateau(monitor=monitor, mode='auto', factor=0.2, patience=patience_lr, min_lr=0.00001, cooldown=10, verbose=True)
+    reduce_lr = ReduceLROnPlateau(monitor=monitor, mode='auto', factor=0.2, patience=patience_lr, min_lr=0.00001, cooldown=10, verbose=True) #FIXME keep this min?
     
     # save the model every now and then
     # kept only during excecution time and removed afterwards
@@ -591,38 +480,6 @@ class Trainer(object):
     model_filename = '{}/net_model_weighted.h5'.format(self.outdir)
     model.save(model_filename)
     print(' --> {} created'.format(model_filename))
-
-
-  def plotParametrisedMass(self, df, df_full=None, data_type='', label=''):
-    '''
-    '''
-    if data_type not in ['data', 'mc']:
-      raise RuntimeError('Unknown data type "{}". Please check'.format(data_type))
-
-    masses = self.getMassList()
-    bin_min = 0
-    bin_max = 6.5
-    nbins = 80.
-
-    fig = plt.figure()
-    ax = fig.add_subplot(111)
-    #if not df_full.empty:
-    if isinstance(df_full, pd.DataFrame):
-      ax.hist(df_full['hnl_mass'], bins=np.arange(bin_min, bin_max, (bin_max-bin_min)/nbins), color='whitesmoke', label='unused')
-
-    for mass in masses:
-      resolution = self.resolution_p0 + self.resolution_p1 * mass
-      window_min = mass - self.nsigma * resolution
-      window_max = mass + self.nsigma * resolution
-      window = 'hnl_mass > {} && hnl_mass < {}'.format(window_min, window_max)
-      df_window = df.query(self.mva_tools.getPandasQuery(window))
-      ax.hist(df_window['hnl_mass'], bins=np.arange(bin_min, bin_max, (bin_max-bin_min)/nbins), label='mass key = {}'.format(mass))
-
-    ax.legend(loc='upper right',prop={'size': 12})
-    ax.set_title(label, fontsize=20)
-    ax.set_xlabel('Mass spectrum',fontsize=18)
-    self.saveFig(fig, 'mass_{}_{}'.format(data_type, label))
-    plt.clf()
 
 
   def plotLoss(self, history):
@@ -829,23 +686,12 @@ class Trainer(object):
 
     # get the samples
     print('\n -> get the samples')
-    data_samples = self.getDataSamples(extra_selection = 'abs(bs_mass_corr - 5.367) > 0.2')
-    mc_samples = self.getMCSamples(extra_selection='ismatched == 1')
+    mc_samples, mc_stat = self.getMCSamples(extra_selection='ismatched == 1')
+    data_samples, balance_weight_mc = self.getDataSamples(extra_selection='abs(bs_mass_corr - 5.367) > 0.2', max_stat=mc_stat)
 
-    # create dataframes
+    ## create dataframes
     print('\n -> create the dataframes')
-    data_df, mc_df = self.createDataframe(data_samples, mc_samples)
-
-    #else:
-    #  print('\n -> create the dataframes')
-    #  # do not load too much files in case of large statistics
-    #  #if category.label in ['lxysig0to50_OS', 'lxysig0to50_SS', 'lxysig0to50_OS_Bc', 'lxysig0to50_SS_Bc']: max_files = 10 
-    #  #elif category.label in ['lxysig50to150_OS', 'lxysig50to150_SS', 'lxysig50to150_OS_Bc', 'lxysig50to150_SS_Bc']: max_files = 30 
-    #  #else: max_files = -1
-    #  max_files = -1
-
-    #  mc_df, statistics = self.createParametrisedDataframe(extra_selection=category.definition_flat, data_type='mc', is_bc=category.is_bc)
-    #  data_df, data_df_full = self.createParametrisedDataframe(extra_selection=category.definition_flat, data_type='data', statistics=statistics, max_files=max_files, is_bc=category.is_bc)
+    data_df, mc_df = self.createDataframe(data_samples, mc_samples, balance_weight_mc)
 
     # assign the signal tag
     data_df = self.assignTarget(data_df, self.target_branch, 0) 
@@ -856,39 +702,21 @@ class Trainer(object):
     #main_df, qt, xx, Y = self.preprocessing(data_df, mc_df, category.label)
     main_df, qt, xx, Y = self.preprocessing(data_df, mc_df)
 
-    # define the NN
+    ## define the NN
     print('\n -> defining the model' )
     model = self.defineModel()
 
     # define the callbacks
     print('\n -> defining the callbacks' )
-    #if statistics < 3000:
-    #  patience_es = 5
-    #  patience_lr = 3
-    #else:
-    patience_es = 10
-    patience_lr = 5
+    patience_es = 5#10
+    patience_lr = 3#5
     #callbacks = self.defineCallbacks(category.label, patience_es, patience_lr)
     callbacks = self.defineCallbacks(patience_es, patience_lr)
 
-    # out of the main_df, define which data chunks to 
-    # train and test on. Make sure that the features
-    # are scaled
+    # out of the main_df, define which data chunks to train and test on. Make sure that the features are scaled
     print('\n -> prepare the inputs' )
     x_train, x_val, y_train, y_val, weight_train, weight_val = self.prepareScaledInputs(main_df, Y, qt)
     #x_train, x_val, y_train, y_val = self.prepareInputs(xx, Y)
-
-    ## create statistics file
-    #stat_filename = '{}/statistics_{}.txt'.format(self.outdir, category.label)
-    #stat_file = open(stat_filename, 'w+')
-    #stat_file.write('\nAimed statistics per mass parameter: {}'.format(statistics))
-    #stat_file.write('\nFull statistics for data: {}'.format(len(data_df)))
-    #stat_file.write('\nFull statistics for mc: {}'.format(len(mc_df)))
-    #stat_file.write('\nFull statistics for data+mc: {}'.format(len(main_df)))
-    #stat_file.write('\nData+mc statistics used for training: {}'.format(len(x_train)))
-    #stat_file.write('\nData+mc statistics used for validation: {}'.format(len(x_val)))
-    #stat_file.close()
-    #print(' --> {} created'.format(stat_filename) )
 
     # do the training
     print('\n -> training...' )
@@ -1002,8 +830,8 @@ if __name__ == '__main__':
 
   #features = ['pi_pt','mu_pt', 'mu0_pt','hnl_cos2d', 'sv_lxysig', 'pi_dcasig_corr', 'sv_prob', 'mu0_mu_mass', 'mu0_pi_mass', 'b_mass','deltar_mu0_mu', 'deltar_mu0_pi', 'mu0_pfiso03_rel', 'mu_pfiso03_rel', 'pi_numberofpixellayers', 'pi_numberoftrackerlayers', 'mu_numberofpixellayers', 'mu_numberoftrackerlayers', 'mu0_numberofpixellayers', 'mu0_numberoftrackerlayers']
 
-  epochs = 3#50#3 #100
-  batch_size = 50 #32 #50 #32
+  epochs = 50#3 #100
+  batch_size = 50#32 #50 #32
   learning_rate = 0.005 #0.01
   number_nodes = 64
   scaler_type = 'robust'
@@ -1014,6 +842,9 @@ if __name__ == '__main__':
 
   baseline_selection = 'bs_charge==0'
 
+  year = '2018'
+  dirname += '_' + year
+
   #categories = categories['categories_0_50_150_Bc']
   #category_batch = getOptions().category_batch
 
@@ -1021,11 +852,16 @@ if __name__ == '__main__':
 
   submit_batch = False
 
-  nsigma = 10
-  signal_label = 'V13_06Feb23_m2'
-  data_pl = 'V13_06Feb23'
-  data_tagnano = '06Feb23'
-  data_tagflat = '31Jul23'
+  #signal_label = 'V13_06Feb23_m2'
+  #data_pl = 'V13_06Feb23'
+  #data_tagnano = '06Feb23'
+  #data_tagflat = '31Jul23'
+
+  signal_label = 'V03_24Sep25'
+  data_label = 'V03_24Sep25'
+
+  data_files = data_samples[data_label]
+  signal_files = signal_samples[signal_label]
 
   trainer = Trainer(
       features = features, 
@@ -1036,13 +872,15 @@ if __name__ == '__main__':
       scaler_type = scaler_type,
       do_early_stopping = do_early_stopping,
       do_reduce_lr = do_reduce_lr,
-      signal_label = signal_label, 
-      data_pl = data_pl,
-      data_tagnano = data_tagnano,
-      data_tagflat = data_tagflat,
-      nsigma = nsigma,
+      #signal_label = signal_label, 
+      #data_pl = data_pl,
+      data_files = data_files,
+      #data_tagnano = data_tagnano,
+      #data_tagflat = data_tagflat,
+      signal_files = signal_files,
       dirname = dirname,
       baseline_selection = baseline_selection,
+      year = year,
       #categories = categories,
       #category_batch = category_batch,
       outdir = outdir,
