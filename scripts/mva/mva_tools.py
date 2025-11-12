@@ -4,14 +4,16 @@ from os import path
 
 import ROOT
 
-from root_pandas import read_root
-
 import pickle
+import uproot
 import numpy as np
 import pandas as pd
 from array import array
 
 from keras.models import load_model
+
+import warnings
+warnings.filterwarnings("ignore", message="The value of the smallest subnormal.*")
 
 
 class TrainingInfo(object):
@@ -34,18 +36,14 @@ class TrainingInfo(object):
 
 
   def loadModel(self):
-    print '\n --> get the model'
-    #if self.category_label != None:
-    #  model_filename = '{}/net_model_weighted_{}.h5'.format(self.indir, self.category_label)
-    #else:
-    #  model_filename = '{}/net_model_weighted.h5'.format(self.indir)
+    print('\n --> get the model')
     model_filename = '{}/net_model_weighted.h5'.format(self.indir)
     model = load_model(model_filename)
     return model
 
 
   def loadScaler(self):
-    print '\n --> get the scaler'
+    print('\n --> get the scaler')
     if self.category_label != None:
       scaler_filename = '/'.join([self.indir, 'input_tranformation_weighted_{}.pck'.format(self.category_label)])
     else:
@@ -55,7 +53,7 @@ class TrainingInfo(object):
 
 
   def loadFeatures(self):
-    print '\n --> get the features'
+    print('\n --> get the features')
     if self.category_label != None:
       features_filename = '/'.join([self.indir, 'input_features_{}.pck'.format(self.category_label)])
     else:
@@ -70,8 +68,17 @@ class MVATools(object):
   '''
     This class contains tools to allow the mva selection
   '''
-  def __init__(self, path_mva='./'):
+  def __init__(self, path_mva='./mva/outputs'):
       self.path_mva = path_mva
+
+
+  def getPandasQuery(self, selection):
+    '''
+      Converts selection to pandas query syntax
+    '''
+    query = selection.replace('&&', ' and ').replace('||', ' or ').replace('!=', ' not ').replace('!', ' not ')
+    
+    return query
 
 
   def getSelection(self, selection):
@@ -135,7 +142,10 @@ class MVATools(object):
     else:
       extra_columns = ['bs_mass_corr'] + weights
 
-    df = read_root(sample, signal_treename, where=self.getSelection(selection), warn_missing_tree=True, columns=training_info.features+extra_columns)
+    with uproot.open(sample) as file:
+      tree = file[signal_treename]
+      df = tree.arrays(training_info.features+extra_columns, library="pd")
+      df = df.query(self.getPandasQuery(self.getSelection(selection)))
 
     return df
 
@@ -197,15 +207,15 @@ class MVATools(object):
       Note that both the baseline selection and category definition have to be applied
     '''
     # get the training information
-    print '\n --> get training info'
+    print('\n --> get training info')
     training_info = self.getTrainingInfo(training_label)
 
     # create dataframe
-    print '\n --> create dataframe'
+    print('\n --> create dataframe')
     df = self.createDataframe(training_info=training_info, do_parametric=do_parametric, mass=mass, samples_filename=samples_filename, selection=selection, weights=weights, signal_treename=treename)
 
     # get the score
-    print '\n --> predict the score'
+    print('\n --> predict the score')
     score = self.predictScore(training_info=training_info, df=df, do_parametric=do_parametric) 
 
     # get other quantities to fill the branches with
@@ -220,7 +230,7 @@ class MVATools(object):
     out_file = ROOT.TFile(root_filename, 'RECREATE')
 
     # create tree
-    print ' --> create analysis tree'
+    print(' --> create analysis tree')
     tree = ROOT.TTree(treename, treename)
 
     # initialise branches
@@ -250,10 +260,10 @@ class MVATools(object):
     tree.Write()
     out_file.Close()
 
-    print ' --> {} created'.format(root_filename)
+    print(' --> {} created'.format(root_filename))
 
     
-  def getFileWithScore(self, files=None, training_label='', do_parametric=False, mass=5.367, selection='bs_charge == 0', weights=None, label='', treename='signal_tree', force_overwrite=False, is_bc=False): 
+  def getFileWithScore(self, files=None, training_label='', do_parametric=False, mass=5.367, selection='bs_charge == 0', weights=['bs_charge'], label='', treename='signal_tree', force_overwrite=False, is_bc=False): 
     '''
       This function returns the file with the analysis tree that contains the hnl mass, the score and other quantities used for signal reweighting
       The argument 'weights' is the list of branches that will need to be added to the tree for the reweighting at analysis level
@@ -262,14 +272,8 @@ class MVATools(object):
     '''
     samples_filename = []
     for filename in files:
-      #if not is_bc:
-      #  filename = file_.filename
-      #else:
-      #  filename = file_.filename_Bc
       samples_filename.append(filename)
-      print filename
       
-    #root_filename = './{}.root'.format(label.replace('.', 'p'))
     root_filename = './outputs/{}_{}.root'.format(training_label, label)
     if force_overwrite or not path.exists(root_filename):
       self.createFileWithAnalysisTree(training_label=training_label, do_parametric=do_parametric, mass=mass, samples_filename=samples_filename, selection=selection, weights=weights, label=label, treename=treename)
